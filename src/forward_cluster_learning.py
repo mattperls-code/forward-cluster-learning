@@ -68,12 +68,16 @@ class ForwardClusterLearning:
         # parameters to pass to each layer's isolated optimizer
         optimizer_kwargs: dict | None,
 
+        # loss function used to train final classification head
+        loss_function: callable,
+
         # choice of per-layer similarity definition
         similarity_metric: SimilarityMetric,
 
         # number of initial layers to be trained with backpropagation, using loss derived by the following layer's similarity function
         backpropagation_cutoff: int = 0
     ):
+        self.loss_function = loss_function
         self.similarity_metric = similarity_metric
         self.backpropagation_cutoff = backpropagation_cutoff
 
@@ -100,7 +104,7 @@ class ForwardClusterLearning:
 
         current_layer_state = inputs
 
-        for _, layer in self.layers.items():
+        for _, layer in list(self.layers.items())[:-1]:
             module = layer["module"]
             optimizer = layer["optimizer"]
 
@@ -117,14 +121,49 @@ class ForwardClusterLearning:
 
             current_layer_state = current_layer_state.detach()
 
-        print(current_layer_state)
-        print()
-
     # rebuild the final classification head to reflect the provided training data, treating the final layer as an independent regression task on the subsequent layer's output
     def build_classification_head(
         self,
+        
+        # (batch_size, input_dim)
+        inputs: torch.Tensor,
 
-        # list of labeled training examples, each containing an input tensor and correct classification label
-        training_data: list[tuple[torch.Tensor, int]]
+        # (batch_size,)
+        labels: torch.Tensor,
+
+        # number of times to step the optimizer
+        optimizer_iterations
     ):
-        pass
+        output_layer_name, output_layer = next(
+            (layer_name, layer) for layer_name, layer in reversed(self.layers.items())
+            if layer["optimizer"] is not None
+        )
+
+        output_module = output_layer["module"]
+        output_optimizer = output_layer["optimizer"]
+
+        fixed_point_layer_state = inputs
+
+        with torch.no_grad():
+            for layer_name, layer in self.layers.items():
+                if layer_name == output_layer_name: break
+
+                fixed_point_layer_state = layer["module"](fixed_point_layer_state)
+
+        for _ in range(optimizer_iterations):
+            current_layer_state = output_module(fixed_point_layer_state)
+
+            reached = False
+
+            for layer_name, layer in self.layers.items():
+                if reached:
+                    current_layer_state = layer["module"](current_layer_state)
+
+                if layer_name == output_layer_name:
+                    reached = True
+
+            loss = self.loss_function(current_layer_state, labels)
+
+            output_optimizer.zero_grad()
+            loss.backward()
+            output_optimizer.step()

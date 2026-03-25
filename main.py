@@ -19,9 +19,11 @@ def plot_similarity_matrix(similarity_matrix: torch.Tensor, labels: torch.Tensor
 
 def main():
     example_mlp = torch.nn.Sequential(
-        torch.nn.Linear(4, 10),
+        torch.nn.Linear(4, 3),
         torch.nn.ReLU(),
-        torch.nn.Linear(10, 10)
+        torch.nn.Linear(3, 3),
+        torch.nn.ReLU(),
+        torch.nn.Linear(3, 3)
     )
 
     training_inputs = torch.tensor([
@@ -35,12 +37,22 @@ def main():
 
     training_labels = torch.tensor([ 0, 0, 1, 1, 2, 2 ])
 
-    trainer = fcl.ForwardClusterLearning(example_mlp, torch.optim.Adam, { "lr": 0.001 }, fcl.SimilarityMetric("SQRT_DOT"), 0)
+    trainer = fcl.ForwardClusterLearning(
+        example_mlp,
+        torch.optim.Adam,
+        { "lr": 0.004 },
+        torch.nn.functional.cross_entropy,
+        fcl.SimilarityMetric("SQRT_DOT"),
+        0
+    )
 
-    for _ in range(1000):
+    for _ in range(5000):
         trainer.cluster(training_inputs, training_labels)
 
-    plot_similarity_matrix(trainer.similarity_metric(example_mlp(training_inputs)), training_labels)
+    trainer.build_classification_head(training_inputs, training_labels, 5000)
+
+    torch.set_printoptions(sci_mode=False)
+    print(torch.softmax(example_mlp(training_inputs), dim=1))
 
 if __name__ == "__main__":
     main()
