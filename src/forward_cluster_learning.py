@@ -104,6 +104,7 @@ class ForwardClusterLearning:
 
         current_layer_state = inputs
 
+        # TODO: should handle non-parameterized final layer more efficiently by clipping earlier
         for _, layer in list(self.layers.items())[:-1]:
             module = layer["module"]
             optimizer = layer["optimizer"]
@@ -120,6 +121,12 @@ class ForwardClusterLearning:
                 optimizer.step()
 
             current_layer_state = current_layer_state.detach()
+
+        similarity_matrix = self.similarity_metric(current_layer_state)
+                
+        loss = (similarity_matrix[~same_classification_mask & unique_pairs_mask].sum() - similarity_matrix[same_classification_mask & unique_pairs_mask].sum()) / unique_pairs_mask.sum()
+
+        return loss
 
     # rebuild the final classification head to reflect the provided training data, treating the final layer as an independent regression task on the subsequent layer's output
     def build_classification_head(
@@ -150,6 +157,8 @@ class ForwardClusterLearning:
 
                 fixed_point_layer_state = layer["module"](fixed_point_layer_state)
 
+        loss = None
+
         for _ in range(optimizer_iterations):
             current_layer_state = output_module(fixed_point_layer_state)
 
@@ -167,3 +176,5 @@ class ForwardClusterLearning:
             output_optimizer.zero_grad()
             loss.backward()
             output_optimizer.step()
+
+        return loss.detach()
