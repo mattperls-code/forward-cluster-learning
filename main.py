@@ -1,13 +1,15 @@
 import torch
 from sklearn.datasets import make_classification, load_iris, load_wine, load_digits, fetch_covtype, load_linnerud
+from torchvision import datasets, transforms
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import src.forward_cluster_learning as fcl
 import matplotlib.pyplot as plt
 import numpy as np
+import math
 
-def profile_model(name, bp_model, bp_lr, fcl, num_training_batches, batch_size, x, y, runs=5):
-    batch_number_samples = list(range(0, num_training_batches, num_training_batches // 100))
+def profile_model(name, bp_model, bp_lr, fcl, num_training_batches, batch_size, x, y, scale, runs=5):
+    batch_number_samples = list(range(0, num_training_batches, math.ceil(num_training_batches / 100)))
     bp_accuracy_runs = np.zeros((runs, len(batch_number_samples)))
     fcl_accuracy_runs = np.zeros((runs, len(batch_number_samples)))
 
@@ -20,11 +22,13 @@ def profile_model(name, bp_model, bp_lr, fcl, num_training_batches, batch_size, 
         bp_optimizer = torch.optim.Adam(bp_model.parameters(), lr=bp_lr)
 
         x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.2)
-        scaler = StandardScaler()
-        x_train = torch.tensor(scaler.fit_transform(x_train), dtype=torch.float32)
-        x_test  = torch.tensor(scaler.transform(x_test),      dtype=torch.float32)
-        y_train = torch.tensor(y_train, dtype=torch.long)
-        y_test  = torch.tensor(y_test,  dtype=torch.long)
+
+        if scale:
+            scaler = StandardScaler()
+            x_train = torch.tensor(scaler.fit_transform(x_train), dtype=torch.float32)
+            x_test  = torch.tensor(scaler.transform(x_test),      dtype=torch.float32)
+            y_train = torch.tensor(y_train, dtype=torch.long)
+            y_test  = torch.tensor(y_test,  dtype=torch.long)
 
         sample_idx = 0
         for i in range(num_training_batches):
@@ -39,7 +43,7 @@ def profile_model(name, bp_model, bp_lr, fcl, num_training_batches, batch_size, 
 
             fcl.backward(batch_x, batch_y)
 
-            if i % (num_training_batches // 100) == 0:
+            if i % math.ceil(num_training_batches / 100) == 0:
                 print(f"  Batch {i}/{num_training_batches}")
 
                 bp_model.eval()
@@ -58,7 +62,7 @@ def profile_model(name, bp_model, bp_lr, fcl, num_training_batches, batch_size, 
     fcl_std  = fcl_accuracy_runs.std(axis=0)
 
     plt.clf()
-    plt.title(f"Average Accuracy on {name} ({runs} runs)")
+    plt.title(name, pad=20)
     plt.xlabel("Training Iterations")
     plt.ylabel("Accuracy")
     plt.ylim(0, 1)
@@ -70,66 +74,36 @@ def profile_model(name, bp_model, bp_lr, fcl, num_training_batches, batch_size, 
     plt.fill_between(batch_number_samples, fcl_mean - fcl_std, fcl_mean + fcl_std, alpha=0.2)
 
     plt.legend(loc="lower right")
-    plt.savefig(f"Accuracy on {name}")
+    plt.savefig(name)
 
-def make_spiral(n_samples=10000, noise=0.05):
-    n = n_samples // 2
-    theta = np.linspace(0, 4 * np.pi, n)
-    
-    r = np.linspace(0.1, 1, n)
-    X1 = np.column_stack([r * np.cos(theta), r * np.sin(theta)])
-    X2 = np.column_stack([r * np.cos(theta + np.pi), r * np.sin(theta + np.pi)])
-    
-    X1 += np.random.randn(*X1.shape) * noise
-    X2 += np.random.randn(*X2.shape) * noise
-    
-    X = np.vstack([X1, X2]).astype(np.float32)
-    y = np.array([0] * n + [1] * n, dtype=np.int64)
-    
-    return torch.tensor(X), torch.tensor(y)
+def profile_synthetically_generated_clusters():
+    n_features = 64
+    hidden_width = 32
+    n_classes = 5
 
-if __name__ == "__main__":
-    n_features = 24
-    hidden_width = 64
-    n_classes = 4
     x, y = make_classification(
-        n_samples=5000,
+        n_samples=4000,
         n_features=n_features,
         n_classes=n_classes,
-        n_informative=int(0.8 * n_features),
-        n_redundant=2,
-        n_clusters_per_class=3,
-        class_sep=0.7,
-        flip_y=0.02,
+        n_informative=int(0.7 * n_features),
+        n_clusters_per_class=5,
+        class_sep=2.5,
+        flip_y=0.04,
         random_state=0
     )
 
-    # n_features = 64
-    # hidden_width=128
-    # n_classes = 10
-    # digits = load_digits()
-    # x = torch.tensor(digits.data, dtype=torch.float32)
-    # y = torch.tensor(digits.target, dtype=torch.long)
-
-    # n_features = 2
-    # hidden_width=32
-    # n_classes = 2
-    # x, y = make_spiral()
-
     profile_model(
-        "Synthetically Generated Clusters",
+        "Difficult Synthetically Generated Clusters",
         torch.nn.Sequential(
             torch.nn.Linear(n_features, hidden_width),
-            # torch.nn.ReLU(),
-            # torch.nn.Linear(hidden_width, hidden_width),
-            # torch.nn.ReLU(),
-            # torch.nn.Linear(hidden_width, hidden_width),
-            # torch.nn.ReLU(),
-            # torch.nn.Linear(hidden_width, hidden_width),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_width, hidden_width),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_width, hidden_width),
             torch.nn.ReLU(),
             torch.nn.Linear(hidden_width, n_classes)
         ),
-        0.014,
+        0.016,
         fcl.ForwardClusterLearning(
             torch.nn.Sequential(
                 torch.nn.Linear(n_features, hidden_width),
@@ -140,20 +114,96 @@ if __name__ == "__main__":
                 fcl.PredictionLayer(hidden_width, n_classes),
                 torch.nn.Linear(hidden_width, hidden_width),
                 torch.nn.ReLU(),
-                fcl.PredictionLayer(hidden_width, n_classes),
-                torch.nn.Linear(hidden_width, hidden_width),
-                torch.nn.ReLU(),
-                fcl.PredictionLayer(hidden_width, n_classes),
-                torch.nn.Linear(hidden_width, hidden_width),
-                torch.nn.ReLU(),
                 fcl.PredictionLayer(hidden_width, n_classes)
             ),
             torch.optim.Adam,
-            { "lr": 0.014 }
+            { "lr": 0.016 }
         ),
-        500,
-        1000,
+        200,
+        int(0.8 * 4000),
         x,
         y,
-        runs=5
+        True,
+        runs=10
     )
+
+def load_mnist():
+    dataset = datasets.MNIST(root="./data", train=True, download=True, transform=transforms.ToTensor())
+    
+    x = dataset.data.unsqueeze(1).float() / 255.0  # (70000, 1, 28, 28)
+    y = torch.tensor(dataset.targets.numpy(), dtype=torch.long)
+
+    return x, y
+
+def profile_mnist_digit_cnn():
+    x, y = load_mnist()
+
+    profile_model(
+        "MNIST Digit",
+        torch.nn.Sequential(
+            # Block 1: 1x28x28 -> 32x14x14
+            torch.nn.Conv2d(1, 32, kernel_size=3, padding=1),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(32, 32, kernel_size=3, padding=1),
+            torch.nn.ReLU(),
+            torch.nn.MaxPool2d(2),          # 32x14x14
+
+            # Block 2: 32x14x14 -> 64x7x7
+            torch.nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            torch.nn.ReLU(),
+            torch.nn.MaxPool2d(2),          # 64x7x7
+
+            torch.nn.Flatten(),             # 64*7*7 = 3136
+            torch.nn.Linear(64 * 7 * 7, 1024),
+            torch.nn.ReLU(),
+
+            torch.nn.Linear(1024, 128),
+            torch.nn.ReLU(),
+
+            torch.nn.Linear(128, 10)
+        ),
+        0.003,
+        fcl.ForwardClusterLearning(
+            torch.nn.Sequential(
+                # Block 1: 1x28x28 -> 32x14x14
+                torch.nn.Conv2d(1, 32, kernel_size=3, padding=1),
+                torch.nn.ReLU(),
+                torch.nn.Conv2d(32, 32, kernel_size=3, padding=1),
+                torch.nn.ReLU(),
+                torch.nn.MaxPool2d(2),          # 32x14x14
+                fcl.PredictionLayer(32*14*14, 10),
+
+                # Block 2: 32x14x14 -> 64x7x7
+                torch.nn.Conv2d(32, 64, kernel_size=3, padding=1),
+                torch.nn.ReLU(),
+                torch.nn.Conv2d(64, 64, kernel_size=3, padding=1),
+                torch.nn.ReLU(),
+                torch.nn.MaxPool2d(2),          # 64x7x7
+                fcl.PredictionLayer(64*7*7, 10),
+
+                torch.nn.Flatten(),             # 64*7*7 = 3136
+                torch.nn.Linear(64 * 7 * 7, 1024),
+                torch.nn.ReLU(),
+                fcl.PredictionLayer(1024, 10),
+
+                torch.nn.Linear(1024, 128),
+                torch.nn.ReLU(),
+                fcl.PredictionLayer(128, 10)
+            ),
+            torch.optim.Adam,
+            { "lr": 0.003 }
+        ),
+        45,
+        100, # int(0.8 * 70000),
+        x,
+        y,
+        False,
+        runs=1
+    )
+
+if __name__ == "__main__":
+    # profile_synthetically_generated_clusters()
+
+    profile_mnist_digit_cnn()

@@ -22,7 +22,7 @@ class PredictionLayer(nn.Module):
         return x
 
     def predict(self, x: torch.Tensor) -> torch.Tensor:
-        return F.softmax(self.encoder(x), dim=-1)
+        return F.softmax(self.encoder(x.flatten(start_dim=1)), dim=-1)
 
 class ForwardClusterLearning:
     def __init__(
