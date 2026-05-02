@@ -1,28 +1,32 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Optional
+from typing import Optional, Literal
 
 class PredictionLayer(nn.Module):
     def __init__(
         self,
         input_feature_count: int,
-        classification_count: int
+        classification_count: int,
+        seq_pooling_method: None | Literal["mean"] | Literal["last"] = None
     ):
         super().__init__()
 
-        self.encoder = nn.Sequential(
-            nn.Linear(input_feature_count, classification_count)
-            # nn.Linear(input_feature_count, input_feature_count),
-            # nn.ReLU(),
-            # nn.Linear(input_feature_count, classification_count),
-        )
+        self.encoder = nn.Sequential(nn.Linear(input_feature_count, classification_count))
+        self.seq_pooling_method = seq_pooling_method
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x
 
     def predict(self, x: torch.Tensor) -> torch.Tensor:
-        return F.softmax(self.encoder(x.flatten(start_dim=1)), dim=-1)
+        if self.seq_pooling_method is None:
+            return F.softmax(self.encoder(x.flatten(start_dim=1)), dim=-1)
+        
+        elif self.seq_pooling_method == "mean":
+            return F.softmax(self.encoder(x.mean(dim=1)), dim=-1)
+        
+        else:
+            return F.softmax(self.encoder(x[:, -1, :]), dim=-1)
 
 class ForwardClusterLearning:
     def __init__(
@@ -58,6 +62,17 @@ class ForwardClusterLearning:
             if not segment_params: raise ValueError(f"Prediction Segment {i} has no trainable parameters.")
 
             self.optimizers.append(optimizer_class(segment_params, **optimizer_kwargs))
+
+    def to(self, device: torch.device):
+        self.model.to(device)
+
+        for optimizer in self.optimizers:
+            for state in optimizer.state.values():
+                for k, v in state.items():
+                    if isinstance(v, torch.Tensor):
+                        state[k] = v.to(device)
+                        
+        return self
 
     def reset(self):
         for layer in self.model.children():

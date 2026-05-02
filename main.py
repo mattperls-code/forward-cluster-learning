@@ -1,3 +1,7 @@
+import os
+import requests
+import random
+from typing import Literal
 import torch
 from sklearn.datasets import make_classification, load_iris, load_wine, load_digits, fetch_covtype, load_linnerud
 from torchvision import datasets, transforms
@@ -8,7 +12,30 @@ import matplotlib.pyplot as plt
 import numpy as np
 import math
 
-def profile_model(name, bp_model, bp_lr, fcl, num_training_batches, batch_size, x, y, scale, runs=5):
+device = torch.device(
+    "cuda" if torch.cuda.is_available() else
+    "mps" if torch.mps.is_available() else
+    "cpu"
+)
+
+print(f"Using device {device}")
+
+def profile_model(
+    name,
+    bp_model,
+    bp_lr,
+    fcl,
+    num_training_batches,
+    batch_size,
+    x,
+    y,
+    scale,
+    seq_pooling_method: None | Literal["mean"] | Literal["last"] = None,
+    runs=5
+):
+    bp_model.to(device)
+    fcl.to(device)
+
     batch_number_samples = list(range(0, num_training_batches, math.ceil(num_training_batches / 100)))
     bp_accuracy_runs = np.zeros((runs, len(batch_number_samples)))
     fcl_accuracy_runs = np.zeros((runs, len(batch_number_samples)))
@@ -30,15 +57,24 @@ def profile_model(name, bp_model, bp_lr, fcl, num_training_batches, batch_size, 
             y_train = torch.tensor(y_train, dtype=torch.long)
             y_test  = torch.tensor(y_test,  dtype=torch.long)
 
+        x_test = x_test.to(device)
+        y_test = y_test.to(device)
+
         sample_idx = 0
         for i in range(num_training_batches):
             batch_indices = torch.randperm(len(x_train))[:batch_size]
-            batch_x = x_train[batch_indices]
-            batch_y = y_train[batch_indices]
+            batch_x = x_train[batch_indices].to(device)
+            batch_y = y_train[batch_indices].to(device)
 
             bp_model.train()
             bp_optimizer.zero_grad()
-            torch.nn.functional.cross_entropy(bp_model(batch_x), batch_y).backward()
+
+            predicted_y = bp_model(batch_x)
+
+            if seq_pooling_method == "last": predicted_y = predicted_y[:, -1, :]
+            elif seq_pooling_method == "mean": predicted_y = predicted_y.mean(axis=1)
+
+            torch.nn.functional.cross_entropy(predicted_y, batch_y).backward()
             bp_optimizer.step()
 
             fcl.backward(batch_x, batch_y)
@@ -48,7 +84,12 @@ def profile_model(name, bp_model, bp_lr, fcl, num_training_batches, batch_size, 
 
                 bp_model.eval()
                 with torch.no_grad():
-                    bp_acc = (bp_model(x_test).argmax(dim=1) == y_test).float().mean().item()
+                    bp_predicted_y = bp_model(x_test)
+
+                    if seq_pooling_method == "last": bp_predicted_y = bp_predicted_y[:, -1, :]
+                    elif seq_pooling_method == "mean": bp_predicted_y = bp_predicted_y.mean(axis=1)
+
+                    bp_acc = (bp_predicted_y.argmax(dim=1) == y_test).float().mean().item()
 
                 fcl_acc = (fcl.forward(x_test) == y_test).float().mean().item()
 
@@ -65,7 +106,7 @@ def profile_model(name, bp_model, bp_lr, fcl, num_training_batches, batch_size, 
     plt.title(name, pad=20)
     plt.xlabel("Training Iterations")
     plt.ylabel("Accuracy")
-    plt.ylim(0, 1)
+    plt.ylim(0, 1.1)
 
     plt.plot(batch_number_samples, bp_mean,  label="Back Propagation")
     plt.fill_between(batch_number_samples, bp_mean - bp_std, bp_mean + bp_std, alpha=0.2)
@@ -193,17 +234,115 @@ def profile_mnist_digit_cnn():
                 fcl.PredictionLayer(128, 10)
             ),
             torch.optim.Adam,
-            { "lr": 0.003 }
+            { "lr": 0.001 }
         ),
-        45,
-        100, # int(0.8 * 70000),
+        500,
+        8000, # int(0.8 * 70000),
         x,
         y,
         False,
-        runs=1
+        runs=10
+    )
+    
+def load_synthetic_modular_addition(
+    max_samples: int = 10000,
+    p: int = 31
+):
+    chars = list("0123456789+= ")
+    stoi = {c: i for i, c in enumerate(chars)}
+    pad_idx = stoi[' ']
+
+    def make_sample():
+        terms = [ random.randint(1, 99) for _ in range(2) ]
+        expr = "+".join(str(t) for t in terms) + "="
+        target = sum(terms) % p
+        return expr, target
+
+    samples = [ make_sample() for _ in range(max_samples) ]
+    max_len = max(len(expr) for expr, _ in samples)
+
+    def encode(expr):
+        tokens = [stoi[c] for c in expr]
+        tokens += [pad_idx] * (max_len - len(tokens))
+        return torch.tensor(tokens, dtype=torch.long)
+
+    x = torch.stack([ encode(expr) for expr, _ in samples ])
+    y = torch.tensor([ target for _, target in samples ], dtype=torch.long)
+
+    return x, y
+    
+def profile_modular_arithmetic_transformer():
+    p = 17
+
+    x, y = load_synthetic_modular_addition(max_samples=100000, p=p)
+
+    d_model = 128
+    n_heads = 4
+    d_ff = 256
+
+    class EmbeddingWithPosition(torch.nn.Module):
+        def __init__(self, vocab_size, d_model, max_len):
+            super().__init__()
+
+            self.tok = torch.nn.Embedding(vocab_size, d_model)
+            self.pos = torch.nn.Embedding(max_len, d_model)
+
+        def forward(self, x):
+            positions = torch.arange(x.shape[1], device=x.device).unsqueeze(0)
+
+            return self.tok(x) + self.pos(positions)
+        
+    class LastToken(torch.nn.Module):
+        def forward(self, x):
+            return x[:, -1, :]
+
+    profile_model(
+        "Modular Addition",
+        torch.nn.Sequential(
+            EmbeddingWithPosition(p, d_model, max_len=x.shape[1]),
+            torch.nn.TransformerEncoderLayer(d_model, n_heads, d_ff, batch_first=True),
+            torch.nn.TransformerEncoderLayer(d_model, n_heads, d_ff, batch_first=True),
+
+            torch.nn.TransformerEncoderLayer(d_model, n_heads, d_ff, batch_first=True),
+            
+            LastToken(),
+            torch.nn.Linear(d_model, d_model // 2),
+
+            torch.nn.ReLU(),
+            torch.nn.Linear(d_model // 2, p)
+        ),
+        0.0005,
+        fcl.ForwardClusterLearning(
+            torch.nn.Sequential(
+                EmbeddingWithPosition(p, d_model, max_len=x.shape[1]),
+                torch.nn.TransformerEncoderLayer(d_model, n_heads, d_ff, batch_first=True),
+                torch.nn.TransformerEncoderLayer(d_model, n_heads, d_ff, batch_first=True),
+                fcl.PredictionLayer(d_model, p, seq_pooling_method="last"),
+
+                torch.nn.TransformerEncoderLayer(d_model, n_heads, d_ff, batch_first=True),
+                fcl.PredictionLayer(d_model, p, seq_pooling_method="last"),
+                
+                LastToken(),
+                torch.nn.Linear(d_model, d_model // 2),
+                fcl.PredictionLayer(d_model // 2, p),
+
+                torch.nn.ReLU(),
+                fcl.PredictionLayer(d_model // 2, p)
+            ),
+            torch.optim.Adam,
+            { "lr": 0.0005 }
+        ),
+        500,
+        10000,
+        x,
+        y,
+        False,
+        runs=10
     )
 
 if __name__ == "__main__":
     # profile_synthetically_generated_clusters()
 
-    profile_mnist_digit_cnn()
+    # profile_mnist_digit_cnn()
+
+    profile_modular_arithmetic_transformer()
