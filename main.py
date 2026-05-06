@@ -1,5 +1,3 @@
-import os
-import requests
 import random
 from typing import Literal
 import torch
@@ -7,7 +5,7 @@ from sklearn.datasets import make_classification, load_iris, load_wine, load_dig
 from torchvision import datasets, transforms
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-import src.forward_cluster_learning as fcl
+import LPSL as lpsl
 import matplotlib.pyplot as plt
 import numpy as np
 import math
@@ -24,7 +22,7 @@ def profile_model(
     name,
     bp_model,
     bp_lr,
-    fcl,
+    lpsl,
     num_training_batches,
     batch_size,
     x,
@@ -34,17 +32,17 @@ def profile_model(
     runs=5
 ):
     bp_model.to(device)
-    fcl.to(device)
+    lpsl.to(device)
 
     batch_number_samples = list(range(0, num_training_batches, math.ceil(num_training_batches / 100)))
     bp_accuracy_runs = np.zeros((runs, len(batch_number_samples)))
-    fcl_accuracy_runs = np.zeros((runs, len(batch_number_samples)))
+    lpsl_accuracy_runs = np.zeros((runs, len(batch_number_samples)))
 
     for run in range(runs):
         print(f"\n--- Run {run + 1}/{runs} ---")
 
         bp_model.apply(lambda m: m.reset_parameters() if hasattr(m, 'reset_parameters') else None)
-        fcl.reset()
+        lpsl.reset()
 
         bp_optimizer = torch.optim.Adam(bp_model.parameters(), lr=bp_lr)
 
@@ -77,7 +75,7 @@ def profile_model(
             torch.nn.functional.cross_entropy(predicted_y, batch_y).backward()
             bp_optimizer.step()
 
-            fcl.backward(batch_x, batch_y)
+            lpsl.backward(batch_x, batch_y)
 
             if i % math.ceil(num_training_batches / 100) == 0:
                 print(f"  Batch {i}/{num_training_batches}")
@@ -91,16 +89,16 @@ def profile_model(
 
                     bp_acc = (bp_predicted_y.argmax(dim=1) == y_test).float().mean().item()
 
-                fcl_acc = (fcl.forward(x_test) == y_test).float().mean().item()
+                lpsl_acc = (lpsl.forward(x_test) == y_test).float().mean().item()
 
                 bp_accuracy_runs[run, sample_idx]  = bp_acc
-                fcl_accuracy_runs[run, sample_idx] = fcl_acc
+                lpsl_accuracy_runs[run, sample_idx] = lpsl_acc
                 sample_idx += 1
 
     bp_mean  = bp_accuracy_runs.mean(axis=0)
     bp_std   = bp_accuracy_runs.std(axis=0)
-    fcl_mean = fcl_accuracy_runs.mean(axis=0)
-    fcl_std  = fcl_accuracy_runs.std(axis=0)
+    lpsl_mean = lpsl_accuracy_runs.mean(axis=0)
+    lpsl_std  = lpsl_accuracy_runs.std(axis=0)
 
     plt.clf()
     plt.title(name, pad=20)
@@ -108,11 +106,11 @@ def profile_model(
     plt.ylabel("Accuracy")
     plt.ylim(0, 1.1)
 
-    plt.plot(batch_number_samples, bp_mean,  label="Back Propagation")
+    plt.plot(batch_number_samples, bp_mean,  label="Backpropagation")
     plt.fill_between(batch_number_samples, bp_mean - bp_std, bp_mean + bp_std, alpha=0.2)
 
-    plt.plot(batch_number_samples, fcl_mean, label="Forward Cluster Learning")
-    plt.fill_between(batch_number_samples, fcl_mean - fcl_std, fcl_mean + fcl_std, alpha=0.2)
+    plt.plot(batch_number_samples, lpsl_mean, label="Local Prediction Segment Learning")
+    plt.fill_between(batch_number_samples, lpsl_mean - lpsl_std, lpsl_mean + lpsl_std, alpha=0.2)
 
     plt.legend(loc="lower right")
     plt.savefig(name)
@@ -145,17 +143,17 @@ def profile_synthetically_generated_clusters():
             torch.nn.Linear(hidden_width, n_classes)
         ),
         0.016,
-        fcl.ForwardClusterLearning(
+        lpsl.LocalPredictionSegmentLearning(
             torch.nn.Sequential(
                 torch.nn.Linear(n_features, hidden_width),
                 torch.nn.ReLU(),
-                fcl.PredictionLayer(hidden_width, n_classes),
+                lpsl.PredictionLayer(hidden_width, n_classes),
                 torch.nn.Linear(hidden_width, hidden_width),
                 torch.nn.ReLU(),
-                fcl.PredictionLayer(hidden_width, n_classes),
+                lpsl.PredictionLayer(hidden_width, n_classes),
                 torch.nn.Linear(hidden_width, hidden_width),
                 torch.nn.ReLU(),
-                fcl.PredictionLayer(hidden_width, n_classes)
+                lpsl.PredictionLayer(hidden_width, n_classes)
             ),
             torch.optim.Adam,
             { "lr": 0.016 }
@@ -187,16 +185,16 @@ def profile_mnist_digit_cnn():
             torch.nn.ReLU(),
             torch.nn.Conv2d(32, 32, kernel_size=3, padding=1),
             torch.nn.ReLU(),
-            torch.nn.MaxPool2d(2),          # 32x14x14
+            torch.nn.MaxPool2d(2),
 
             # Block 2: 32x14x14 -> 64x7x7
             torch.nn.Conv2d(32, 64, kernel_size=3, padding=1),
             torch.nn.ReLU(),
             torch.nn.Conv2d(64, 64, kernel_size=3, padding=1),
             torch.nn.ReLU(),
-            torch.nn.MaxPool2d(2),          # 64x7x7
+            torch.nn.MaxPool2d(2),
 
-            torch.nn.Flatten(),             # 64*7*7 = 3136
+            torch.nn.Flatten(),
             torch.nn.Linear(64 * 7 * 7, 1024),
             torch.nn.ReLU(),
 
@@ -206,32 +204,32 @@ def profile_mnist_digit_cnn():
             torch.nn.Linear(128, 10)
         ),
         0.003,
-        fcl.ForwardClusterLearning(
+        lpsl.LocalPredictionSegmentLearning(
             torch.nn.Sequential(
                 # Block 1: 1x28x28 -> 32x14x14
                 torch.nn.Conv2d(1, 32, kernel_size=3, padding=1),
                 torch.nn.ReLU(),
                 torch.nn.Conv2d(32, 32, kernel_size=3, padding=1),
                 torch.nn.ReLU(),
-                torch.nn.MaxPool2d(2),          # 32x14x14
-                fcl.PredictionLayer(32*14*14, 10),
+                torch.nn.MaxPool2d(2),
+                lpsl.PredictionLayer(32 * 14 * 14, 10),
 
                 # Block 2: 32x14x14 -> 64x7x7
                 torch.nn.Conv2d(32, 64, kernel_size=3, padding=1),
                 torch.nn.ReLU(),
                 torch.nn.Conv2d(64, 64, kernel_size=3, padding=1),
                 torch.nn.ReLU(),
-                torch.nn.MaxPool2d(2),          # 64x7x7
-                fcl.PredictionLayer(64*7*7, 10),
+                torch.nn.MaxPool2d(2),
+                lpsl.PredictionLayer(64 * 7 * 7, 10),
 
-                torch.nn.Flatten(),             # 64*7*7 = 3136
+                torch.nn.Flatten(),
                 torch.nn.Linear(64 * 7 * 7, 1024),
                 torch.nn.ReLU(),
-                fcl.PredictionLayer(1024, 10),
+                lpsl.PredictionLayer(1024, 10),
 
                 torch.nn.Linear(1024, 128),
                 torch.nn.ReLU(),
-                fcl.PredictionLayer(128, 10)
+                lpsl.PredictionLayer(128, 10)
             ),
             torch.optim.Adam,
             { "lr": 0.001 }
@@ -245,15 +243,15 @@ def profile_mnist_digit_cnn():
     )
     
 def load_synthetic_modular_addition(
-    max_samples: int = 10000,
-    p: int = 31
+    max_samples: int = 100000,
+    p: int = 113
 ):
     chars = list("0123456789+= ")
     stoi = {c: i for i, c in enumerate(chars)}
     pad_idx = stoi[' ']
 
     def make_sample():
-        terms = [ random.randint(1, 99) for _ in range(2) ]
+        terms = [ random.randint(0, p) for _ in range(2) ]
         expr = "+".join(str(t) for t in terms) + "="
         target = sum(terms) % p
         return expr, target
@@ -272,7 +270,7 @@ def load_synthetic_modular_addition(
     return x, y
     
 def profile_modular_arithmetic_transformer():
-    p = 17
+    p = 31
 
     x, y = load_synthetic_modular_addition(max_samples=100000, p=p)
 
@@ -295,6 +293,10 @@ def profile_modular_arithmetic_transformer():
     class LastToken(torch.nn.Module):
         def forward(self, x):
             return x[:, -1, :]
+        
+    class MeanToken(torch.nn.Module):
+        def forward(self, x):
+            return x.mean(dim=1)
 
     profile_model(
         "Modular Addition",
@@ -305,35 +307,33 @@ def profile_modular_arithmetic_transformer():
 
             torch.nn.TransformerEncoderLayer(d_model, n_heads, d_ff, batch_first=True),
             
-            LastToken(),
+            MeanToken(),
             torch.nn.Linear(d_model, d_model // 2),
-
             torch.nn.ReLU(),
+
             torch.nn.Linear(d_model // 2, p)
         ),
         0.0005,
-        fcl.ForwardClusterLearning(
+        lpsl.LocalPredictionSegmentLearning(
             torch.nn.Sequential(
                 EmbeddingWithPosition(p, d_model, max_len=x.shape[1]),
                 torch.nn.TransformerEncoderLayer(d_model, n_heads, d_ff, batch_first=True),
                 torch.nn.TransformerEncoderLayer(d_model, n_heads, d_ff, batch_first=True),
-                fcl.PredictionLayer(d_model, p, seq_pooling_method="last"),
+                lpsl.PredictionLayer(d_model, p, seq_pooling_method="mean"),
 
                 torch.nn.TransformerEncoderLayer(d_model, n_heads, d_ff, batch_first=True),
-                fcl.PredictionLayer(d_model, p, seq_pooling_method="last"),
+                lpsl.PredictionLayer(d_model, p, seq_pooling_method="mean"),
                 
-                LastToken(),
+                MeanToken(),
                 torch.nn.Linear(d_model, d_model // 2),
-                fcl.PredictionLayer(d_model // 2, p),
-
                 torch.nn.ReLU(),
-                fcl.PredictionLayer(d_model // 2, p)
+                lpsl.PredictionLayer(d_model // 2, p)
             ),
             torch.optim.Adam,
             { "lr": 0.0005 }
         ),
         500,
-        10000,
+        20000,
         x,
         y,
         False,
@@ -341,8 +341,8 @@ def profile_modular_arithmetic_transformer():
     )
 
 if __name__ == "__main__":
-    # profile_synthetically_generated_clusters()
+    profile_synthetically_generated_clusters()
 
-    # profile_mnist_digit_cnn()
+    profile_mnist_digit_cnn()
 
     profile_modular_arithmetic_transformer()

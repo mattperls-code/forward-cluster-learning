@@ -28,7 +28,7 @@ class PredictionLayer(nn.Module):
         else:
             return F.softmax(self.encoder(x[:, -1, :]), dim=-1)
 
-class ForwardClusterLearning:
+class LocalPredictionSegmentLearning:
     def __init__(
         self,
         model: nn.Sequential,
@@ -38,7 +38,7 @@ class ForwardClusterLearning:
         optimizer_kwargs = optimizer_kwargs or {}
         layers = list(model.children())
 
-        if not isinstance(layers[-1], PredictionLayer): raise ValueError( "The last layer of the model must be a PredictionLayer.")
+        if not isinstance(layers[-1], PredictionLayer): raise ValueError("The last layer of the model must be a PredictionLayer.")
 
         self.model = model
 
