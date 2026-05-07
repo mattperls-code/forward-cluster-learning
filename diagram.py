@@ -144,10 +144,10 @@ def add_arrows(layers, cx, start_y):
 
 # ── build svg ────────────────────────────────────────────────────────────────
 def build_svg(bp_layers, lpsl_layers, bp_title, lpsl_title, dark=False):
-    W = 680 + PRED_W
+    W = 600 + PRED_W
     MARGIN_TOP = 52
     COL1 = 170
-    COL2 = 500
+    COL2 = 420
 
     def height(layers):
         y = 0
@@ -230,7 +230,7 @@ def build_svg(bp_layers, lpsl_layers, bp_title, lpsl_title, dark=False):
 #         Layer("misc",   "Flatten",                  "64×7×7 → 3136"),
 #         Layer("linear", "Linear + ReLU",            "3136 → 1024"),
 #         Layer("linear", "Linear + ReLU",            "1024 → 128"),
-#         Layer("output", "Linear",                   "128 → 10"),
+#         Layer("output", "Linear + Softmax",                   "128 → 10"),
 #     ]
 
 
@@ -260,44 +260,8 @@ def build_svg(bp_layers, lpsl_layers, bp_title, lpsl_title, dark=False):
 #         Layer("linear", "Linear + ReLU", "64 → 32"),
 #         Layer("linear", "Linear + ReLU", "32 → 32"),
 #         Layer("linear", "Linear + ReLU", "32 → 32"),
-#         Layer("output", "Linear",        "32 → 5"),
+#         Layer("output", "Linear + Softmax",        "32 → 5"),
 #     ]
-
-
-def example_bp():
-    return [
-        Layer("misc", "Embedding + Positional Encoding", "p → d_model"),
-
-        Layer("linear", "Transformer Encoder ×3", "d_model → d_model"),
-
-        Layer("misc", "MeanToken", ""),
-
-        Layer("linear", "MLP", "d_model → d_model/2"),
-        Layer("linear", "ReLU", ""),
-
-        Layer("output", "Linear", "d_model/2 → p"),
-    ]
-
-
-def example_lpsl():
-    return [
-        # ── Segment 1 ─────────────────────────────
-        Layer("misc", "Embedding + Positional Encoding", "p → d_model"),
-        Layer("linear", "Transformer Block ×2", "d_model → d_model"),
-        Layer("pred", "Prediction (mean pool)", "d_model → p", True),
-
-        # ── Segment 2 ─────────────────────────────
-        Layer("linear", "Transformer Block", "d_model → d_model"),
-        Layer("pred", "Prediction (mean pool)", "d_model → p", True),
-
-        # ── Final segment ─────────────────────────
-        Layer("misc", "MeanToken", ""),
-
-        Layer("linear", "MLP", "d_model → d_model/2"),
-        Layer("linear", "ReLU", ""),
-
-        Layer("pred", "Prediction", "d_model/2 → p", True),
-    ]
 
 
 # def example_lpsl():
@@ -314,6 +278,35 @@ def example_lpsl():
 #         Layer("linear", "Linear + ReLU", "32 → 32"),
 #         Layer("pred",   "Prediction",    "32 → 5", True)
 #     ]
+
+def example_bp():
+    return [
+        Layer("linear", "Embedding + Positional Encoding", "(31 × SequenceLen) → (128 × SequenceLen)"),
+
+        Layer("conv", "Transformer Encoder ×3", "(128 × SequenceLen) → (128 × SequenceLen)"),
+
+        Layer("pool", "MeanToken", "(128 × SequenceLen) → 128"),
+
+        Layer("linear", "Linear + ReLU", "128 → 64"),
+
+        Layer("output", "Linear + Softmax", "64 → 31"),
+    ]
+
+
+def example_lpsl():
+    return [
+        Layer("linear", "Embedding + Positional Encoding", "(31 × SequenceLen) → (128 × SequenceLen)"),
+
+        Layer("conv", "Transformer Encoder ×2", "(128 × SequenceLen) → (128 × SequenceLen)"),
+        Layer("pred", "Prediction", "128 → 31", True),
+
+        Layer("conv", "Transformer Encoder ×1", "(128 × SequenceLen) → (128 × SequenceLen)"),
+        Layer("pred", "Prediction", "128 → 31", True),
+
+        Layer("pool", "MeanToken", "(128 × SequenceLen) → 128"),
+        Layer("linear", "Linear + ReLU", "128 → 64"),
+        Layer("pred", "Prediction", "64 → 31", True)
+    ]
 
 # ── main ─────────────────────────────────────────────────────────────────────
 def main():

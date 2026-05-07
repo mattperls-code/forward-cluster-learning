@@ -5,7 +5,7 @@ from sklearn.datasets import make_classification, load_iris, load_wine, load_dig
 from torchvision import datasets, transforms
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-import LPSL as lpsl
+import src.LPSL as lpsl
 import matplotlib.pyplot as plt
 import numpy as np
 import math
@@ -333,7 +333,7 @@ def profile_modular_arithmetic_transformer():
             { "lr": 0.0005 }
         ),
         500,
-        20000,
+        10000,
         x,
         y,
         False,
@@ -341,8 +341,8 @@ def profile_modular_arithmetic_transformer():
     )
 
 if __name__ == "__main__":
-    profile_synthetically_generated_clusters()
+    # profile_synthetically_generated_clusters()
 
-    profile_mnist_digit_cnn()
+    # profile_mnist_digit_cnn()
 
     profile_modular_arithmetic_transformer()
